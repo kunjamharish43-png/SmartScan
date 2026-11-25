@@ -63,6 +63,7 @@ import com.smartscan.pro.engine.ImageEnhancer
 import com.smartscan.pro.engine.ScanFilter
 import com.smartscan.pro.ui.EditorSession
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -81,7 +82,12 @@ private data class PageEditParams(
 fun ImageEditorScreen(
     session: EditorSession,
     onCancel: () -> Unit,
-    onSaveComplete: (finalTitle: String, finalFolder: String, finalPaths: List<String>) -> Unit
+    onSaveComplete: (
+        finalTitle: String,
+        finalFolder: String,
+        finalPaths: List<String>,
+        imagesModified: Boolean
+    ) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val pagePaths = session.pagePaths
@@ -111,13 +117,16 @@ fun ImageEditorScreen(
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     LaunchedEffect(currentPath) {
+        previewBitmap = null
         baseBitmap = withContext(Dispatchers.IO) {
-            ImageEnhancer.loadScaledBitmap(currentPath, maxDimension = 1280)
+            ImageEnhancer.loadScaledBitmap(currentPath, maxDimension = 1000)
         }
     }
 
+    // 45ms debounce avoids frame drops while dragging brightness/contrast sliders
     LaunchedEffect(baseBitmap, currentParams) {
         val src = baseBitmap ?: return@LaunchedEffect
+        delay(45L)
         previewBitmap = withContext(Dispatchers.Default) {
             ImageEnhancer.applyEnhancements(
                 source = src,
@@ -140,7 +149,6 @@ fun ImageEditorScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Top Toolbar
         Surface(tonalElevation = 3.dp) {
             Row(
                 modifier = Modifier
@@ -188,12 +196,14 @@ fun ImageEditorScreen(
                     onClick = {
                         isSaving = true
                         scope.launch {
+                            var anyModified = false
                             val savedPaths = withContext(Dispatchers.IO) {
                                 pagePaths.mapIndexed { idx, path ->
                                     val params = editMap[idx] ?: PageEditParams(filter = ScanFilter.ORIGINAL)
                                     if (!params.isModified()) {
                                         path
                                     } else {
+                                        anyModified = true
                                         val fullBmp = ImageEnhancer.loadScaledBitmap(path, maxDimension = 2200)
                                         if (fullBmp != null) {
                                             val enhanced = ImageEnhancer.applyEnhancements(
@@ -212,7 +222,7 @@ fun ImageEditorScreen(
                                 }
                             }
                             isSaving = false
-                            onSaveComplete(docTitle, docFolder, savedPaths)
+                            onSaveComplete(docTitle, docFolder, savedPaths, anyModified)
                         }
                     }
                 ) {
@@ -231,7 +241,6 @@ fun ImageEditorScreen(
             }
         }
 
-        // Document Preview Area
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -255,7 +264,6 @@ fun ImageEditorScreen(
             }
         }
 
-        // Multi-Page Strip (if more than 1 page)
         if (pagePaths.size > 1) {
             Row(
                 modifier = Modifier
@@ -293,7 +301,6 @@ fun ImageEditorScreen(
             }
         }
 
-        // Enhancement Controls Panel
         Surface(
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp
@@ -304,7 +311,6 @@ fun ImageEditorScreen(
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Filter Presets
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -320,7 +326,6 @@ fun ImageEditorScreen(
                     }
                 }
 
-                // Brightness & Contrast Sliders
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -346,7 +351,6 @@ fun ImageEditorScreen(
                     }
                 }
 
-                // Rotate & Reset Actions
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly
