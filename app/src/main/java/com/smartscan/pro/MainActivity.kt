@@ -28,6 +28,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,15 +52,19 @@ import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
 import com.smartscan.pro.ads.AdMobBannerBar
 import com.smartscan.pro.ads.InterstitialAdManager
 import com.smartscan.pro.data.DocumentEntity
+import com.smartscan.pro.engine.BiometricAuthHelper
+import com.smartscan.pro.engine.OcrEngine
 import com.smartscan.pro.engine.PdfStudioEngine
 import com.smartscan.pro.ui.SmartScanViewModel
 import com.smartscan.pro.ui.navigation.AppTab
 import com.smartscan.pro.ui.navigation.SmartScanBottomBar
 import com.smartscan.pro.ui.screens.AiAssistantScreen
+import com.smartscan.pro.ui.screens.BiometricLockScreen
 import com.smartscan.pro.ui.screens.DocumentsScreen
 import com.smartscan.pro.ui.screens.HomeScreen
 import com.smartscan.pro.ui.screens.ImageEditorScreen
 import com.smartscan.pro.ui.screens.MergeDocumentsDialog
+import com.smartscan.pro.ui.screens.OcrStudioScreen
 import com.smartscan.pro.ui.screens.PdfStudioScreen
 import com.smartscan.pro.ui.screens.ScanScreen
 import com.smartscan.pro.ui.screens.SettingsScreen
@@ -76,6 +81,7 @@ class MainActivity : FragmentActivity() {
     private lateinit var viewModel: SmartScanViewModel
     private var activeScanMode: String = "Document"
     private var pendingExportPdfFile: File? = null
+    private var pendingExportTxtContent: String? = null
 
     private val documentScannerLauncher = registerForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
@@ -126,13 +132,20 @@ class MainActivity : FragmentActivity() {
         val src = pendingExportPdfFile
         if (destinationUri != null && src != null) {
             val ok = PdfStudioEngine.copyFileToUri(this, src, destinationUri)
-            if (ok) {
-                showToast("PDF phone storage mein save ho gaya!")
-            } else {
-                showToast("PDF export fail hua. Dobara try karein.")
-            }
+            showToast(if (ok) "PDF phone storage mein save ho gaya!" else "PDF export fail hua.")
         }
         pendingExportPdfFile = null
+    }
+
+    private val safTxtExportLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain")
+    ) { destinationUri ->
+        val text = pendingExportTxtContent
+        if (destinationUri != null && text != null) {
+            val ok = OcrEngine.saveTextToUri(this, text, destinationUri)
+            showToast(if (ok) "Text file (.txt) save ho gayi!" else "Text file export fail hua.")
+        }
+        pendingExportTxtContent = null
     }
 
     private fun launchRealScanner(mode: String) {
@@ -183,6 +196,16 @@ class MainActivity : FragmentActivity() {
         safPdfExportLauncher.launch(cleanName)
     }
 
+    private fun exportTxtToStorage(textContent: String, suggestedName: String) {
+        pendingExportTxtContent = textContent
+        val cleanName = if (suggestedName.endsWith(".txt", ignoreCase = true)) {
+            suggestedName
+        } else {
+            "$suggestedName.txt"
+        }
+        safTxtExportLauncher.launch(cleanName)
+    }
+
     private fun showToast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
@@ -200,36 +223,85 @@ class MainActivity : FragmentActivity() {
             var themeMode by remember { mutableStateOf(SmartScanPrefs.getThemeMode(this)) }
             var biometricEnabled by remember { mutableStateOf(SmartScanPrefs.isBiometricEnabled(this)) }
             var apiKey by remember { mutableStateOf(SmartScanPrefs.getAiApiKey(this)) }
+            var isUnlocked by remember { mutableStateOf(!biometricEnabled) }
+            var lockError by remember { mutableStateOf<String?>(null) }
 
-            SmartScanTheme(themeMode = themeMode) {
-                SmartScanRootApp(
-                    viewModel = viewModel,
-                    themeMode = themeMode,
-                    biometricEnabled = biometricEnabled,
-                    apiKey = apiKey,
-                    onThemeChange = { newMode ->
-                        themeMode = newMode
-                        SmartScanPrefs.setThemeMode(this, newMode)
+            fun triggerAppUnlock() {
+                BiometricAuthHelper.authenticate(
+                    activity = this,
+                    title = "Unlock Smart Scan",
+                    subtitle = "Verify your fingerprint or screen lock to continue",
+                    onSuccess = {
+                        lockError = null
+                        isUnlocked = true
                     },
-                    onBiometricChange = { enabled ->
-                        biometricEnabled = enabled
-                        SmartScanPrefs.setBiometricEnabled(this, enabled)
-                    },
-                    onSaveApiKey = { key ->
-                        apiKey = key
-                        SmartScanPrefs.setAiApiKey(this, key)
-                    },
-                    onLaunchScanner = { mode -> launchRealScanner(mode) },
-                    onImportGallery = { launchGalleryImport() },
-                    onImportExternalPdf = { launchExternalPdfImport() },
-                    onExportPdf = { file, name -> exportPdfToStorage(file, name) },
-                    onSharePdf = { file, title -> PdfStudioEngine.sharePdfFile(this, file, title) },
-                    onTriggerAdThenAction = { action ->
-                        interstitialAdManager.showAdIfReady(this) {
-                            action()
-                        }
+                    onError = { err ->
+                        lockError = err
                     }
                 )
+            }
+
+            LaunchedEffect(Unit) {
+                if (biometricEnabled && !isUnlocked) {
+                    triggerAppUnlock()
+                }
+            }
+
+            SmartScanTheme(themeMode = themeMode) {
+                if (!isUnlocked) {
+                    BiometricLockScreen(
+                        errorMessage = lockError,
+                        onUnlockClick = { triggerAppUnlock() }
+                    )
+                } else {
+                    SmartScanRootApp(
+                        viewModel = viewModel,
+                        themeMode = themeMode,
+                        biometricEnabled = biometricEnabled,
+                        apiKey = apiKey,
+                        onThemeChange = { newMode ->
+                            themeMode = newMode
+                            SmartScanPrefs.setThemeMode(this, newMode)
+                        },
+                        onBiometricChange = { wantEnable ->
+                            if (wantEnable) {
+                                BiometricAuthHelper.authenticate(
+                                    activity = this,
+                                    title = "Enable Fingerprint Lock",
+                                    subtitle = "Confirm fingerprint to protect Smart Scan",
+                                    onSuccess = {
+                                        biometricEnabled = true
+                                        SmartScanPrefs.setBiometricEnabled(this, true)
+                                        showToast("Fingerprint App Lock ON ho gaya!")
+                                    },
+                                    onError = { err ->
+                                        showToast(err)
+                                    }
+                                )
+                            } else {
+                                biometricEnabled = false
+                                SmartScanPrefs.setBiometricEnabled(this, false)
+                                showToast("Fingerprint App Lock OFF ho gaya.")
+                            }
+                        },
+                        onSaveApiKey = { key ->
+                            apiKey = key
+                            SmartScanPrefs.setAiApiKey(this, key)
+                        },
+                        onLaunchScanner = { mode -> launchRealScanner(mode) },
+                        onImportGallery = { launchGalleryImport() },
+                        onImportExternalPdf = { launchExternalPdfImport() },
+                        onExportPdf = { file, name -> exportPdfToStorage(file, name) },
+                        onSharePdf = { file, title -> PdfStudioEngine.sharePdfFile(this, file, title) },
+                        onExportTxt = { text, name -> exportTxtToStorage(text, name) },
+                        onShareTxt = { title, text -> OcrEngine.shareText(this, title, text) },
+                        onTriggerAdThenAction = { action ->
+                            interstitialAdManager.showAdIfReady(this) {
+                                action()
+                            }
+                        }
+                    )
+                }
             }
         }
     }
@@ -249,6 +321,8 @@ private fun SmartScanRootApp(
     onImportExternalPdf: () -> Unit,
     onExportPdf: (File, String) -> Unit,
     onSharePdf: (File, String) -> Unit,
+    onExportTxt: (String, String) -> Unit,
+    onShareTxt: (String, String) -> Unit,
     onTriggerAdThenAction: (action: () -> Unit) -> Unit
 ) {
     val navController = rememberNavController()
@@ -260,6 +334,10 @@ private fun SmartScanRootApp(
     val documents by viewModel.documents.collectAsState()
     val editorSession by viewModel.editorSession.collectAsState()
     val pdfStudioDoc by viewModel.pdfStudioDoc.collectAsState()
+    val ocrStudioDoc by viewModel.ocrStudioDoc.collectAsState()
+    val aiMessages by viewModel.aiMessages.collectAsState()
+    val selectedAiDocId by viewModel.selectedAiDocId.collectAsState()
+    val isAiLoading by viewModel.isAiLoading.collectAsState()
     val isBusy by viewModel.isBusy.collectAsState()
 
     var chosenDocForOptions by remember { mutableStateOf<DocumentEntity?>(null) }
@@ -338,6 +416,49 @@ private fun SmartScanRootApp(
                 )
             }
 
+            ocrStudioDoc != null -> {
+                val activeOcrDoc = ocrStudioDoc!!
+                OcrStudioScreen(
+                    document = activeOcrDoc,
+                    onClose = { viewModel.closeOcrStudio() },
+                    onRunOcr = {
+                        viewModel.runOfflineOcrForDocument(
+                            document = activeOcrDoc,
+                            onSuccess = { msg -> showNotice(msg) },
+                            onError = { err -> showNotice(err) }
+                        )
+                    },
+                    onSaveText = { edited ->
+                        viewModel.saveEditedOcrText(activeOcrDoc, edited) { msg ->
+                            showNotice(msg)
+                        }
+                    },
+                    onExportTxt = { text, name ->
+                        onTriggerAdThenAction { onExportTxt(text, name) }
+                    },
+                    onShareText = { title, text ->
+                        onShareTxt(title, text)
+                    },
+                    onAskAiWithText = { doc, text ->
+                        val updatedDoc = doc.copy(extractedText = text)
+                        viewModel.saveEditedOcrText(doc, text) {}
+                        viewModel.selectAiDocument(updatedDoc.id)
+                        viewModel.closeOcrStudio()
+                        navigateToTab(AppTab.AI_ASSISTANT)
+                        if (apiKey.isNotBlank()) {
+                            viewModel.sendAiPrompt(
+                                apiKey = apiKey,
+                                prompt = "Is document ka clear summary bullet points mein do.",
+                                explicitDoc = updatedDoc
+                            )
+                        } else {
+                            showNotice("AI Assistant khul gaya hai — Settings mein apni Gemini API Key add karein.")
+                        }
+                    },
+                    onNotify = { msg -> showNotice(msg) }
+                )
+            }
+
             else -> {
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -370,12 +491,16 @@ private fun SmartScanRootApp(
                                     when (actionName) {
                                         "ID Card" -> onLaunchScanner("ID Card")
                                         "Gallery Import" -> onImportGallery()
+                                        "Offline OCR" -> {
+                                            val latest = documents.firstOrNull()
+                                            if (latest != null) viewModel.openOcrStudio(latest)
+                                            else showNotice("Pehle ek document scan ya gallery se import karein.")
+                                        }
                                         "PDF Tools" -> {
                                             val latest = documents.firstOrNull()
                                             if (latest != null) viewModel.openPdfStudio(latest)
                                             else onImportExternalPdf()
                                         }
-                                        else -> showNotice("$actionName engine Phase 5 mein connect hoga.")
                                     }
                                 },
                                 onOpenDocument = { doc -> chosenDocForOptions = doc },
@@ -412,14 +537,21 @@ private fun SmartScanRootApp(
                         composable(AppTab.AI_ASSISTANT.route) {
                             AiAssistantScreen(
                                 hasApiKey = apiKey.isNotBlank(),
+                                documents = documents,
+                                selectedDocId = selectedAiDocId,
+                                messages = aiMessages,
+                                isLoading = isAiLoading,
+                                onSelectDoc = { id -> viewModel.selectAiDocument(id) },
+                                onClearChat = { viewModel.clearAiChat() },
                                 onOpenSettings = { navigateToTab(AppTab.SETTINGS) },
-                                onRunAiAction = { query ->
+                                onSendPrompt = { prompt ->
                                     if (apiKey.isBlank()) {
-                                        showNotice("Pehle Settings mein apni AI API Key save karein.")
+                                        showNotice("Pehle Settings mein apni Gemini API Key save karein.")
                                     } else {
-                                        showNotice("AI engine Phase 5 mein connect hoga: $query")
+                                        viewModel.sendAiPrompt(apiKey = apiKey, prompt = prompt)
                                     }
-                                }
+                                },
+                                onCopiedNotice = { msg -> showNotice(msg) }
                             )
                         }
 
@@ -434,23 +566,31 @@ private fun SmartScanRootApp(
                                             if (latest != null) viewModel.openExistingDocumentInEditor(latest)
                                             else onImportGallery()
                                         }
-                                        toolTitle.contains("Image to PDF", ignoreCase = true) -> {
-                                            onImportExternalPdf()
-                                        }
-                                        toolTitle.contains("Merge", ignoreCase = true) -> {
-                                            showMergeDialog = true
-                                        }
+                                        toolTitle.contains("Image to PDF", ignoreCase = true) -> onImportExternalPdf()
+                                        toolTitle.contains("Merge", ignoreCase = true) -> showMergeDialog = true
                                         toolTitle.contains("Split", ignoreCase = true) ||
-                                            toolTitle.contains("Watermark", ignoreCase = true) -> {
+                                            toolTitle.contains("Watermark", ignoreCase = true) ||
+                                            toolTitle.contains("Compression", ignoreCase = true) -> {
                                             val latest = documents.firstOrNull()
                                             if (latest != null) viewModel.openPdfStudio(latest)
                                             else showNotice("Pehle ek document scan ya import karein.")
                                         }
+                                        toolTitle.contains("Offline Image to Text", ignoreCase = true) -> {
+                                            val latest = documents.firstOrNull()
+                                            if (latest != null) viewModel.openOcrStudio(latest)
+                                            else showNotice("OCR ke liye pehle ek document scan ya import karein.")
+                                        }
+                                        toolTitle.contains("Summarize", ignoreCase = true) -> {
+                                            navigateToTab(AppTab.AI_ASSISTANT)
+                                        }
+                                        toolTitle.contains("Folders", ignoreCase = true) -> {
+                                            navigateToTab(AppTab.DOCUMENTS)
+                                        }
                                         toolTitle.contains("Signature", ignoreCase = true) -> {
                                             showStandaloneSignaturePad = true
                                         }
-                                        else -> onTriggerAdThenAction {
-                                            showNotice("$toolTitle module Phase 5 mein connect hoga.")
+                                        toolTitle.contains("Biometric", ignoreCase = true) -> {
+                                            navigateToTab(AppTab.SETTINGS)
                                         }
                                     }
                                 }
@@ -463,13 +603,10 @@ private fun SmartScanRootApp(
                                 biometricEnabled = biometricEnabled,
                                 apiKey = apiKey,
                                 onThemeChange = onThemeChange,
-                                onBiometricChange = { enabled ->
-                                    onBiometricChange(enabled)
-                                    showNotice(if (enabled) "Biometric lock ON saved." else "Biometric lock OFF.")
-                                },
+                                onBiometricChange = onBiometricChange,
                                 onSaveApiKey = { savedKey ->
                                     onSaveApiKey(savedKey)
-                                    showNotice("AI API Key securely saved.")
+                                    showNotice("Gemini API Key securely saved.")
                                 }
                             )
                         }
@@ -490,7 +627,7 @@ private fun SmartScanRootApp(
         }
     }
 
-    // Document Tap Action Dialog: Edit Filters vs PDF Studio
+    // Document Tap Action Dialog: PDF Studio, Offline OCR, Image Filters
     chosenDocForOptions?.let { doc ->
         AlertDialog(
             onDismissRequest = { chosenDocForOptions = null },
@@ -507,6 +644,16 @@ private fun SmartScanRootApp(
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("Open PDF Studio (Watermark / Sign / Export)")
+                    }
+                    Button(
+                        onClick = {
+                            chosenDocForOptions = null
+                            viewModel.openOcrStudio(doc)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Extract Text (Offline OCR)")
                     }
                     OutlinedButton(
                         onClick = {
