@@ -40,9 +40,11 @@ import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Draw
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Layers
@@ -53,6 +55,8 @@ import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Tune
@@ -63,6 +67,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -82,30 +87,57 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.smartscan.pro.BuildConfig
+import com.smartscan.pro.data.DocumentEntity
+import com.smartscan.pro.engine.ImageEnhancer
+import com.smartscan.pro.ui.theme.AmberWarn
 import com.smartscan.pro.ui.theme.CyanAccent
 import com.smartscan.pro.ui.theme.EmeraldSuccess
 import com.smartscan.pro.ui.theme.IndigoPrimary
 import com.smartscan.pro.ui.theme.ThemeMode
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
+    documents: List<DocumentEntity>,
     onOpenScanTab: () -> Unit,
     onOpenToolsTab: () -> Unit,
-    onQuickAction: (String) -> Unit
+    onQuickAction: (String) -> Unit,
+    onOpenDocument: (DocumentEntity) -> Unit,
+    onToggleFavorite: (DocumentEntity) -> Unit,
+    onRenameDocument: (DocumentEntity, String) -> Unit,
+    onDeleteDocument: (DocumentEntity) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+
+    val filteredDocs = remember(documents, searchQuery) {
+        if (searchQuery.isBlank()) {
+            documents.take(8)
+        } else {
+            documents.filter {
+                it.title.contains(searchQuery, ignoreCase = true) ||
+                    it.folderName.contains(searchQuery, ignoreCase = true) ||
+                    it.extractedText.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
             Row(
@@ -156,7 +188,7 @@ fun HomeScreen(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search scans, PDFs, OCR text...") },
+                placeholder = { Text("Search scans, folders, OCR text...") },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)
@@ -193,14 +225,14 @@ fun HomeScreen(
                     title = "ID Card",
                     icon = Icons.Rounded.Badge,
                     tint = IndigoPrimary,
-                    onClick = { onQuickAction("ID Card Scan") }
+                    onClick = { onQuickAction("ID Card") }
                 )
                 QuickActionTile(
                     modifier = Modifier.weight(1f),
-                    title = "Image to PDF",
-                    icon = Icons.Rounded.PictureAsPdf,
+                    title = "Gallery",
+                    icon = Icons.Rounded.PhotoLibrary,
                     tint = Color(0xFFEF4444),
-                    onClick = { onQuickAction("Image to PDF") }
+                    onClick = { onQuickAction("Gallery Import") }
                 )
                 QuickActionTile(
                     modifier = Modifier.weight(1f),
@@ -211,30 +243,201 @@ fun HomeScreen(
                 )
                 QuickActionTile(
                     modifier = Modifier.weight(1f),
-                    title = "Compress",
-                    icon = Icons.Rounded.Compress,
+                    title = "PDF Tools",
+                    icon = Icons.Rounded.PictureAsPdf,
                     tint = EmeraldSuccess,
-                    onClick = { onQuickAction("PDF Compress") }
+                    onClick = { onQuickAction("PDF Tools") }
                 )
             }
         }
 
         item {
-            Text(
-                text = "Recent Documents",
-                style = MaterialTheme.typography.titleLarge
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Recent Documents (${documents.size})",
+                    style = MaterialTheme.typography.titleLarge
+                )
+            }
         }
 
-        item {
-            EmptyStateCard(
-                icon = Icons.Rounded.Folder,
-                title = "No Scanned Documents Yet",
-                subtitle = "Aapka document library abhi khaali hai. Real camera se scan karne ke liye neeche Scan button par tap karein.",
-                buttonLabel = "Start First Scan",
-                onAction = onOpenScanTab
-            )
+        if (filteredDocs.isEmpty()) {
+            item {
+                EmptyStateCard(
+                    icon = Icons.Rounded.Folder,
+                    title = if (searchQuery.isBlank()) "No Scanned Documents Yet" else "No Matching Documents",
+                    subtitle = if (searchQuery.isBlank()) {
+                        "Aapka offline library abhi khaali hai. Real camera se document scan karne ke liye Scan Now par tap karein."
+                    } else {
+                        "\"$searchQuery\" ke liye koi file nahi mili."
+                    },
+                    buttonLabel = "Start First Scan",
+                    onAction = onOpenScanTab
+                )
+            }
+        } else {
+            items(filteredDocs, key = { it.id }) { doc ->
+                DocumentItemCard(
+                    document = doc,
+                    onOpen = { onOpenDocument(doc) },
+                    onToggleFavorite = { onToggleFavorite(doc) },
+                    onRename = { newName -> onRenameDocument(doc, newName) },
+                    onDelete = { onDeleteDocument(doc) }
+                )
+            }
         }
+    }
+}
+
+@Composable
+fun DocumentItemCard(
+    document: DocumentEntity,
+    onOpen: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    var showRename by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val firstPage = remember(document.imagePaths) { document.pagePathList().firstOrNull() }
+    val dateLabel = remember(document.createdAt) {
+        SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(document.createdAt))
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(58.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (firstPage != null && File(firstPage).exists()) {
+                    AsyncImage(
+                        model = File(firstPage),
+                        contentDescription = document.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Rounded.Description,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = document.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${document.pageCount} page(s) • ${ImageEnhancer.formatFileSize(document.fileSizeBytes)} • ${document.folderName}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = dateLabel,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onToggleFavorite, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = if (document.isFavorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                        contentDescription = "Favorite",
+                        tint = if (document.isFavorite) AmberWarn else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                IconButton(onClick = { showRename = true }, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "Rename",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+                IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = "Delete",
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    if (showRename) {
+        var newName by remember(document.title) { mutableStateOf(document.title) }
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename Document") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    singleLine = true,
+                    label = { Text("New Title") }
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (newName.isNotBlank()) onRename(newName)
+                    showRename = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRename = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete Document?") },
+            text = { Text("\"${document.title}\" phone se permanently delete ho jayega.") },
+            confirmButton = {
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                    onClick = {
+                        onDelete()
+                        showDeleteConfirm = false
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -384,7 +587,7 @@ fun ScanScreen(
     onLaunchCamera: (String) -> Unit,
     onImportGallery: () -> Unit
 ) {
-    val scanModes = listOf("Document", "Batch Multi-Page", "ID Card", "Book Mode", "QR / Barcode")
+    val scanModes = listOf("Document", "Batch Multi-Page", "ID Card", "Book Mode")
     var selectedMode by remember { mutableStateOf(scanModes.first()) }
 
     val pulse = rememberInfiniteTransition(label = "cameraPulse")
@@ -411,7 +614,7 @@ fun ScanScreen(
                 style = MaterialTheme.typography.headlineMedium
             )
             Text(
-                text = "Mode select karein aur CameraX / ML Kit Scanner launch karein.",
+                text = "Mode select karein aur live ML Kit Camera Scanner launch karein.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -478,7 +681,7 @@ fun ScanScreen(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "Auto border detection, perspective correction aur glare removal ready.",
+                    text = "Real auto edge detection, manual crop, shadow cleanup aur multi-page scan ready.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -516,56 +719,96 @@ fun ScanScreen(
 
 @Composable
 fun DocumentsScreen(
-    onOpenScanTab: () -> Unit
+    documents: List<DocumentEntity>,
+    onOpenScanTab: () -> Unit,
+    onOpenDocument: (DocumentEntity) -> Unit,
+    onToggleFavorite: (DocumentEntity) -> Unit,
+    onRenameDocument: (DocumentEntity, String) -> Unit,
+    onDeleteDocument: (DocumentEntity) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val filters = listOf("All", "PDF", "Scanned Images", "OCR Text", "Locked Vault")
+    val filters = listOf("All", "Favorites", "Scanned", "ID Cards", "Invoices", "Notes")
     var selectedFilter by remember { mutableStateOf("All") }
 
-    Column(
+    val filteredDocs = remember(documents, searchQuery, selectedFilter) {
+        documents.filter { doc ->
+            val matchesFilter = when (selectedFilter) {
+                "All" -> true
+                "Favorites" -> doc.isFavorite
+                else -> doc.folderName.equals(selectedFilter, ignoreCase = true)
+            }
+            val matchesSearch = searchQuery.isBlank() ||
+                doc.title.contains(searchQuery, ignoreCase = true) ||
+                doc.folderName.contains(searchQuery, ignoreCase = true) ||
+                doc.extractedText.contains(searchQuery, ignoreCase = true)
+            matchesFilter && matchesSearch
+        }
+    }
+
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .background(MaterialTheme.colorScheme.background),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "Documents Library",
-            style = MaterialTheme.typography.headlineMedium
-        )
+        item {
+            Text(
+                text = "Documents Library (${filteredDocs.size})",
+                style = MaterialTheme.typography.headlineMedium
+            )
+        }
 
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Search by file name, tag or date...") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            singleLine = true,
-            shape = RoundedCornerShape(16.dp)
-        )
+        item {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search by file name, folder or text...") },
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            filters.forEach { filter ->
-                FilterChip(
-                    selected = selectedFilter == filter,
-                    onClick = { selectedFilter = filter },
-                    label = { Text(filter) }
-                )
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                filters.forEach { filter ->
+                    FilterChip(
+                        selected = selectedFilter == filter,
+                        onClick = { selectedFilter = filter },
+                        label = { Text(filter) }
+                    )
+                }
             }
         }
 
-        EmptyStateCard(
-            icon = Icons.Rounded.Description,
-            title = "No Files in \"$selectedFilter\"",
-            subtitle = "Room offline database Phase 3 mein connect hoga. Uske baad aapke saare scanned PDFs, folders aur OCR history yahan save rahenge.",
-            buttonLabel = "Scan New Document",
-            onAction = onOpenScanTab
-        )
+        if (filteredDocs.isEmpty()) {
+            item {
+                EmptyStateCard(
+                    icon = Icons.Rounded.Description,
+                    title = "No Files in \"$selectedFilter\"",
+                    subtitle = "Scan ya Gallery se document import karke filters lagayein aur yahan permanent offline save karein.",
+                    buttonLabel = "Scan New Document",
+                    onAction = onOpenScanTab
+                )
+            }
+        } else {
+            items(filteredDocs, key = { it.id }) { doc ->
+                DocumentItemCard(
+                    document = doc,
+                    onOpen = { onOpenDocument(doc) },
+                    onToggleFavorite = { onToggleFavorite(doc) },
+                    onRename = { newName -> onRenameDocument(doc, newName) },
+                    onDelete = { onDeleteDocument(doc) }
+                )
+            }
+        }
     }
 }
 
@@ -620,7 +863,7 @@ fun AiAssistantScreen(
                     text = if (hasApiKey) {
                         "Aapki API key saved hai. Phase 5 mein live document analysis aur chat active ho jayega."
                     } else {
-                        "Real AI results ke liye Settings mein apni Gemini / OpenAI API key daalein. Offline OCR bina internet ke chalega."
+                        "Real AI results ke liye Settings mein apni Gemini API key daalein. Offline OCR bina internet ke chalega."
                     },
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -710,15 +953,15 @@ fun ToolsScreen(
     val toolModules = remember {
         listOf(
             ToolModule("1. Smart Scanning", "Multi-Page & Auto Edge Scan", "Auto crop, perspective fix, ID & book scan", true, Icons.Rounded.DocumentScanner),
-            ToolModule("2. AI Image Enhancement", "Magic Color, B&W & Shadow Fix", "Auto contrast, deskew, sharpen & denoise", true, Icons.Rounded.AutoFixHigh),
-            ToolModule("3. Advanced Image Editing", "Crop, Rotate, Markup & Filters", "Brightness, highlight, blur sensitive areas", true, Icons.Rounded.Crop),
-            ToolModule("4. PDF Creation & Conversion", "Image to PDF & PDF to Image", "A4/Letter sizing, margins, TXT & DOCX export", true, Icons.Rounded.PictureAsPdf),
+            ToolModule("2. AI Image Enhancement", "Magic Color, B&W & Shadow Fix", "Auto contrast, sharpen, rotate & brightness", true, Icons.Rounded.AutoFixHigh),
+            ToolModule("3. Advanced Image Editing", "Gallery Import & Filter Studio", "Import photos and clean document pages", true, Icons.Rounded.Crop),
+            ToolModule("4. PDF Creation & Conversion", "Image to PDF & PDF to Image", "A4/Letter sizing, margins, TXT & PDF export", true, Icons.Rounded.PictureAsPdf),
             ToolModule("5. Advanced PDF Editor", "Merge, Split, Compress & Sign", "Reorder pages, watermark, digital signature", true, Icons.Rounded.CallMerge),
             ToolModule("5. Advanced PDF Editor", "Split & Extract PDF Pages", "Separate ranges or delete unwanted pages", true, Icons.Rounded.ContentCut),
             ToolModule("5. Advanced PDF Editor", "Add Watermark & Signature", "Custom stamp, hand-drawn e-signature", true, Icons.Rounded.BrandingWatermark),
             ToolModule("6. AI OCR & Text Recognition", "Offline Image to Text (ML Kit)", "Copy, edit, search & save extracted text", true, Icons.Rounded.TextFields),
             ToolModule("7. AI Document Assistant", "Summarize, Q&A & Translate", "Online AI powered document intelligence", false, Icons.Rounded.AutoAwesome),
-            ToolModule("8. Document Management", "Folders, Tags & Smart Search", "Offline Room database, favorites & recycle bin", true, Icons.Rounded.Layers),
+            ToolModule("8. Document Management", "Folders, Tags & Smart Search", "Offline Room database, favorites & folders", true, Icons.Rounded.Layers),
             ToolModule("9. Professional Tools", "QR / Barcode & E-Sign Pad", "Scan QR codes, create signatures & stamps", true, Icons.Rounded.QrCodeScanner),
             ToolModule("9. Professional Tools", "Digital Signature Maker", "Draw and save transparent signatures", true, Icons.Rounded.Draw),
             ToolModule("10. Security & Vault", "PDF Password & Biometric Lock", "AES Keystore encryption & fingerprint lock", true, Icons.Rounded.Lock),
