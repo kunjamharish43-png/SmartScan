@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.smartscan.pro.data.DocumentEntity
 import com.smartscan.pro.data.SmartScanDatabase
 import com.smartscan.pro.engine.ImageEnhancer
+import com.smartscan.pro.engine.PdfBuildOptions
+import com.smartscan.pro.engine.PdfStudioEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -41,6 +43,9 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _editorSession = MutableStateFlow<EditorSession?>(null)
     val editorSession: StateFlow<EditorSession?> = _editorSession.asStateFlow()
+
+    private val _pdfStudioDoc = MutableStateFlow<DocumentEntity?>(null)
+    val pdfStudioDoc: StateFlow<DocumentEntity?> = _pdfStudioDoc.asStateFlow()
 
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
@@ -102,6 +107,14 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         _editorSession.value = null
     }
 
+    fun openPdfStudio(document: DocumentEntity) {
+        _pdfStudioDoc.value = document
+    }
+
+    fun closePdfStudio() {
+        _pdfStudioDoc.value = null
+    }
+
     fun saveEditorResult(
         session: EditorSession,
         finalTitle: String,
@@ -141,6 +154,200 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             }
             _editorSession.value = null
             onSaved("\"$safeTitle\" offline library mein save ho gaya.")
+        }
+    }
+
+    fun buildPdfForDocument(
+        document: DocumentEntity,
+        options: PdfBuildOptions,
+        onSuccess: (DocumentEntity, File) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val result = withContext(Dispatchers.IO) {
+                val ctx = getApplication<Application>()
+                val pages = document.pagePathList()
+                val pdfFile = PdfStudioEngine.createPdfFromImages(
+                    context = ctx,
+                    imagePaths = pages,
+                    baseFileName = document.title,
+                    options = options
+                ) ?: return@withContext null
+
+                // Purana temporary PDF clean karein agar alag file hai
+                document.pdfPath?.let { oldPath ->
+                    if (oldPath != pdfFile.absolutePath) {
+                        runCatching { File(oldPath).delete() }
+                    }
+                }
+
+                val updatedDoc = document.copy(
+                    pdfPath = pdfFile.absolutePath,
+                    fileSizeBytes = ImageEnhancer.calculateTotalSize(pages, pdfFile.absolutePath)
+                )
+                dao.updateDocument(updatedDoc)
+                updatedDoc to pdfFile
+            }
+            _isBusy.value = false
+
+            if (result != null) {
+                _pdfStudioDoc.value = result.first
+                onSuccess(result.first, result.second)
+            } else {
+                onError("PDF banane mein error aaya. Pages check karein.")
+            }
+        }
+    }
+
+    fun extractSelectedPages(
+        sourceDoc: DocumentEntity,
+        selectedIndices: List<Int>,
+        newTitle: String,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        if (selectedIndices.isEmpty()) {
+            onError("Kam se kam ek page select karein.")
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val createdTitle = withContext(Dispatchers.IO) {
+                val ctx = getApplication<Application>()
+                val allPages = sourceDoc.pagePathList()
+                val docsDir = ImageEnhancer.getDocumentsDir(ctx)
+
+                val copiedPaths = selectedIndices.mapNotNull { idx ->
+                    val srcPath = allPages.getOrNull(idx) ?: return@mapNotNull null
+                    val srcFile = File(srcPath)
+                    if (!srcFile.exists()) return@mapNotNull null
+                    val destFile = File(docsDir, "split_${System.currentTimeMillis()}_$idx.jpg")
+                    srcFile.copyTo(destFile, overwrite = true)
+                    destFile.absolutePath
+                }
+                if (copiedPaths.isEmpty()) return@withContext null
+
+                val safeTitle = newTitle.trim().ifBlank { "${sourceDoc.title}_Split" }
+                val pdfFile = PdfStudioEngine.createPdfFromImages(
+                    context = ctx,
+                    imagePaths = copiedPaths,
+                    baseFileName = safeTitle,
+                    options = PdfBuildOptions()
+                )
+                val newDoc = DocumentEntity(
+                    title = safeTitle,
+                    folderName = sourceDoc.folderName,
+                    imagePaths = copiedPaths.joinToString("|"),
+                    pdfPath = pdfFile?.absolutePath,
+                    pageCount = copiedPaths.size,
+                    fileSizeBytes = ImageEnhancer.calculateTotalSize(copiedPaths, pdfFile?.absolutePath)
+                )
+                dao.insertDocument(newDoc)
+                safeTitle
+            }
+            _isBusy.value = false
+
+            if (createdTitle != null) {
+                onSuccess("\"$createdTitle\" naye document ke roop mein save ho gaya.")
+            } else {
+                onError("Pages extract karne mein problem aayi.")
+            }
+        }
+    }
+
+    fun mergeDocuments(
+        selectedDocs: List<DocumentEntity>,
+        mergedTitle: String,
+        onSuccess: (DocumentEntity) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        if (selectedDocs.size < 2) {
+            onError("Merge karne ke liye kam se kam 2 documents chunein.")
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val mergedDoc = withContext(Dispatchers.IO) {
+                val ctx = getApplication<Application>()
+                val docsDir = ImageEnhancer.getDocumentsDir(ctx)
+                val combinedPaths = mutableListOf<String>()
+
+                selectedDocs.forEachIndexed { dIdx, doc ->
+                    doc.pagePathList().forEachIndexed { pIdx, path ->
+                        val srcFile = File(path)
+                        if (srcFile.exists()) {
+                            val copyFile = File(docsDir, "merge_${System.currentTimeMillis()}_${dIdx}_$pIdx.jpg")
+                            srcFile.copyTo(copyFile, overwrite = true)
+                            combinedPaths.add(copyFile.absolutePath)
+                        }
+                    }
+                }
+                if (combinedPaths.isEmpty()) return@withContext null
+
+                val safeTitle = mergedTitle.trim().ifBlank { "Merged_SmartScan" }
+                val pdfFile = PdfStudioEngine.createPdfFromImages(
+                    context = ctx,
+                    imagePaths = combinedPaths,
+                    baseFileName = safeTitle,
+                    options = PdfBuildOptions()
+                )
+                val entity = DocumentEntity(
+                    title = safeTitle,
+                    folderName = "Scanned",
+                    imagePaths = combinedPaths.joinToString("|"),
+                    pdfPath = pdfFile?.absolutePath,
+                    pageCount = combinedPaths.size,
+                    fileSizeBytes = ImageEnhancer.calculateTotalSize(combinedPaths, pdfFile?.absolutePath)
+                )
+                val newId = dao.insertDocument(entity)
+                entity.copy(id = newId)
+            }
+            _isBusy.value = false
+
+            if (mergedDoc != null) {
+                _pdfStudioDoc.value = mergedDoc
+                onSuccess(mergedDoc)
+            } else {
+                onError("Documents merge nahi ho paaye.")
+            }
+        }
+    }
+
+    fun importExternalPdf(
+        pdfUri: Uri,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val savedTitle = withContext(Dispatchers.IO) {
+                val ctx = getApplication<Application>()
+                val pagePaths = PdfStudioEngine.renderExternalPdfToImages(ctx, pdfUri)
+                if (pagePaths.isEmpty()) return@withContext null
+
+                val savedPdf = ImageEnhancer.copyUriToPermanentPdf(ctx, pdfUri)?.absolutePath
+                val stamp = SimpleDateFormat("ddMMM_HHmm", Locale.getDefault()).format(Date())
+                val title = "ImportedPDF_$stamp"
+                dao.insertDocument(
+                    DocumentEntity(
+                        title = title,
+                        folderName = "Scanned",
+                        imagePaths = pagePaths.joinToString("|"),
+                        pdfPath = savedPdf,
+                        pageCount = pagePaths.size,
+                        fileSizeBytes = ImageEnhancer.calculateTotalSize(pagePaths, savedPdf)
+                    )
+                )
+                title
+            }
+            _isBusy.value = false
+
+            if (savedTitle != null) {
+                onSuccess("\"$savedTitle\" (${documents.value.firstOrNull()?.pageCount ?: 1} pages) import ho gaya.")
+            } else {
+                onError("PDF file read nahi ho paayi (shayed password locked ya corrupt hai).")
+            }
         }
     }
 
