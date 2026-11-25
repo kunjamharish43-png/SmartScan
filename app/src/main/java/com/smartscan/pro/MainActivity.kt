@@ -11,16 +11,26 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -37,8 +47,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -46,6 +61,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import coil.compose.AsyncImage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
@@ -53,6 +69,7 @@ import com.smartscan.pro.ads.AdMobBannerBar
 import com.smartscan.pro.ads.InterstitialAdManager
 import com.smartscan.pro.data.DocumentEntity
 import com.smartscan.pro.engine.BiometricAuthHelper
+import com.smartscan.pro.engine.ImageEnhancer
 import com.smartscan.pro.engine.OcrEngine
 import com.smartscan.pro.engine.PdfStudioEngine
 import com.smartscan.pro.ui.SmartScanViewModel
@@ -74,6 +91,12 @@ import com.smartscan.pro.ui.theme.SmartScanPrefs
 import com.smartscan.pro.ui.theme.SmartScanTheme
 import kotlinx.coroutines.launch
 import java.io.File
+
+private enum class PendingDocAction(val dialogTitle: String) {
+    PDF_STUDIO("Select Document for PDF Studio"),
+    OCR_STUDIO("Select Document for Offline OCR"),
+    IMAGE_EDITOR("Select Document to Edit Filters")
+}
 
 class MainActivity : FragmentActivity() {
 
@@ -132,7 +155,7 @@ class MainActivity : FragmentActivity() {
         val src = pendingExportPdfFile
         if (destinationUri != null && src != null) {
             val ok = PdfStudioEngine.copyFileToUri(this, src, destinationUri)
-            showToast(if (ok) "PDF phone storage mein save ho gaya!" else "PDF export fail hua.")
+            showToast(if (ok) "PDF saved to device storage." else "Failed to export PDF.")
         }
         pendingExportPdfFile = null
     }
@@ -143,7 +166,7 @@ class MainActivity : FragmentActivity() {
         val text = pendingExportTxtContent
         if (destinationUri != null && text != null) {
             val ok = OcrEngine.saveTextToUri(this, text, destinationUri)
-            showToast(if (ok) "Text file (.txt) save ho gayi!" else "Text file export fail hua.")
+            showToast(if (ok) "Text file (.txt) saved." else "Failed to export text file.")
         }
         pendingExportTxtContent = null
     }
@@ -174,7 +197,7 @@ class MainActivity : FragmentActivity() {
                 )
             }
             .addOnFailureListener { e ->
-                showToast("Scanner start nahi hua (Play Services check karein): ${e.localizedMessage}")
+                showToast("Could not launch scanner: ${e.localizedMessage}")
             }
     }
 
@@ -272,7 +295,7 @@ class MainActivity : FragmentActivity() {
                                     onSuccess = {
                                         biometricEnabled = true
                                         SmartScanPrefs.setBiometricEnabled(this, true)
-                                        showToast("Fingerprint App Lock ON ho gaya!")
+                                        showToast("Fingerprint App Lock enabled.")
                                     },
                                     onError = { err ->
                                         showToast(err)
@@ -281,7 +304,7 @@ class MainActivity : FragmentActivity() {
                             } else {
                                 biometricEnabled = false
                                 SmartScanPrefs.setBiometricEnabled(this, false)
-                                showToast("Fingerprint App Lock OFF ho gaya.")
+                                showToast("Fingerprint App Lock disabled.")
                             }
                         },
                         onSaveApiKey = { key ->
@@ -341,6 +364,8 @@ private fun SmartScanRootApp(
     val isBusy by viewModel.isBusy.collectAsState()
 
     var chosenDocForOptions by remember { mutableStateOf<DocumentEntity?>(null) }
+    var pendingDocPickerAction by remember { mutableStateOf<PendingDocAction?>(null) }
+    var showPdfConvertChoiceDialog by remember { mutableStateOf(false) }
     var showMergeDialog by remember { mutableStateOf(false) }
     var showStandaloneSignaturePad by remember { mutableStateOf(false) }
 
@@ -361,6 +386,29 @@ private fun SmartScanRootApp(
         }
     }
 
+    fun openToolWithDocumentPicker(action: PendingDocAction) {
+        when {
+            documents.isEmpty() -> {
+                if (action == PendingDocAction.IMAGE_EDITOR) {
+                    onImportGallery()
+                } else {
+                    showNotice("Please scan or import a document first.")
+                }
+            }
+            documents.size == 1 -> {
+                val onlyDoc = documents.first()
+                when (action) {
+                    PendingDocAction.PDF_STUDIO -> viewModel.openPdfStudio(onlyDoc)
+                    PendingDocAction.OCR_STUDIO -> viewModel.openOcrStudio(onlyDoc)
+                    PendingDocAction.IMAGE_EDITOR -> viewModel.openExistingDocumentInEditor(onlyDoc)
+                }
+            }
+            else -> {
+                pendingDocPickerAction = action
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             editorSession != null -> {
@@ -368,8 +416,14 @@ private fun SmartScanRootApp(
                 ImageEditorScreen(
                     session = activeSession,
                     onCancel = { viewModel.closeEditor() },
-                    onSaveComplete = { title, folder, paths ->
-                        viewModel.saveEditorResult(activeSession, title, folder, paths) { msg ->
+                    onSaveComplete = { title, folder, paths, imagesModified ->
+                        viewModel.saveEditorResult(
+                            session = activeSession,
+                            finalTitle = title,
+                            finalFolder = folder,
+                            finalPagePaths = paths,
+                            imagesModified = imagesModified
+                        ) { msg ->
                             onTriggerAdThenAction {
                                 showNotice(msg)
                                 navigateToTab(AppTab.DOCUMENTS)
@@ -390,7 +444,7 @@ private fun SmartScanRootApp(
                             options = options,
                             onSuccess = { _, _ ->
                                 onTriggerAdThenAction {
-                                    showNotice("PDF successfully ban gaya! Ab Save ya Share karein.")
+                                    showNotice("PDF generated! You can now Save to Phone or Share.")
                                 }
                             },
                             onError = { err -> showNotice(err) }
@@ -448,11 +502,11 @@ private fun SmartScanRootApp(
                         if (apiKey.isNotBlank()) {
                             viewModel.sendAiPrompt(
                                 apiKey = apiKey,
-                                prompt = "Is document ka clear summary bullet points mein do.",
+                                prompt = "Provide a concise bullet-point summary of this document.",
                                 explicitDoc = updatedDoc
                             )
                         } else {
-                            showNotice("AI Assistant khul gaya hai — Settings mein apni Gemini API Key add karein.")
+                            showNotice("AI Assistant opened — add your Gemini API Key in Settings.")
                         }
                     },
                     onNotify = { msg -> showNotice(msg) }
@@ -491,15 +545,13 @@ private fun SmartScanRootApp(
                                     when (actionName) {
                                         "ID Card" -> onLaunchScanner("ID Card")
                                         "Gallery Import" -> onImportGallery()
-                                        "Offline OCR" -> {
-                                            val latest = documents.firstOrNull()
-                                            if (latest != null) viewModel.openOcrStudio(latest)
-                                            else showNotice("Pehle ek document scan ya gallery se import karein.")
-                                        }
+                                        "Offline OCR" -> openToolWithDocumentPicker(PendingDocAction.OCR_STUDIO)
                                         "PDF Tools" -> {
-                                            val latest = documents.firstOrNull()
-                                            if (latest != null) viewModel.openPdfStudio(latest)
-                                            else onImportExternalPdf()
+                                            if (documents.isNotEmpty()) {
+                                                openToolWithDocumentPicker(PendingDocAction.PDF_STUDIO)
+                                            } else {
+                                                showPdfConvertChoiceDialog = true
+                                            }
                                         }
                                     }
                                 },
@@ -508,7 +560,7 @@ private fun SmartScanRootApp(
                                 onRenameDocument = { doc, name -> viewModel.renameDocument(doc, name) },
                                 onDeleteDocument = { doc ->
                                     viewModel.deleteDocument(doc)
-                                    showNotice("Document delete ho gaya.")
+                                    showNotice("Document deleted.")
                                 }
                             )
                         }
@@ -529,7 +581,7 @@ private fun SmartScanRootApp(
                                 onRenameDocument = { doc, name -> viewModel.renameDocument(doc, name) },
                                 onDeleteDocument = { doc ->
                                     viewModel.deleteDocument(doc)
-                                    showNotice("Document delete ho gaya.")
+                                    showNotice("Document deleted.")
                                 }
                             )
                         }
@@ -546,7 +598,7 @@ private fun SmartScanRootApp(
                                 onOpenSettings = { navigateToTab(AppTab.SETTINGS) },
                                 onSendPrompt = { prompt ->
                                     if (apiKey.isBlank()) {
-                                        showNotice("Pehle Settings mein apni Gemini API Key save karein.")
+                                        showNotice("Please save your Gemini API Key in Settings first.")
                                     } else {
                                         viewModel.sendAiPrompt(apiKey = apiKey, prompt = prompt)
                                     }
@@ -562,23 +614,21 @@ private fun SmartScanRootApp(
                                         toolTitle.contains("Auto Edge", ignoreCase = true) -> onLaunchScanner("Batch Multi-Page")
                                         toolTitle.contains("Gallery Import", ignoreCase = true) -> onImportGallery()
                                         toolTitle.contains("Magic Color", ignoreCase = true) -> {
-                                            val latest = documents.firstOrNull()
-                                            if (latest != null) viewModel.openExistingDocumentInEditor(latest)
-                                            else onImportGallery()
+                                            openToolWithDocumentPicker(PendingDocAction.IMAGE_EDITOR)
                                         }
-                                        toolTitle.contains("Image to PDF", ignoreCase = true) -> onImportExternalPdf()
-                                        toolTitle.contains("Merge", ignoreCase = true) -> showMergeDialog = true
+                                        toolTitle.contains("Image to PDF", ignoreCase = true) -> {
+                                            showPdfConvertChoiceDialog = true
+                                        }
+                                        toolTitle.contains("Merge", ignoreCase = true) -> {
+                                            showMergeDialog = true
+                                        }
                                         toolTitle.contains("Split", ignoreCase = true) ||
                                             toolTitle.contains("Watermark", ignoreCase = true) ||
                                             toolTitle.contains("Compression", ignoreCase = true) -> {
-                                            val latest = documents.firstOrNull()
-                                            if (latest != null) viewModel.openPdfStudio(latest)
-                                            else showNotice("Pehle ek document scan ya import karein.")
+                                            openToolWithDocumentPicker(PendingDocAction.PDF_STUDIO)
                                         }
                                         toolTitle.contains("Offline Image to Text", ignoreCase = true) -> {
-                                            val latest = documents.firstOrNull()
-                                            if (latest != null) viewModel.openOcrStudio(latest)
-                                            else showNotice("OCR ke liye pehle ek document scan ya import karein.")
+                                            openToolWithDocumentPicker(PendingDocAction.OCR_STUDIO)
                                         }
                                         toolTitle.contains("Summarize", ignoreCase = true) -> {
                                             navigateToTab(AppTab.AI_ASSISTANT)
@@ -606,7 +656,7 @@ private fun SmartScanRootApp(
                                 onBiometricChange = onBiometricChange,
                                 onSaveApiKey = { savedKey ->
                                     onSaveApiKey(savedKey)
-                                    showNotice("Gemini API Key securely saved.")
+                                    showNotice("Gemini API Key saved locally.")
                                 }
                             )
                         }
@@ -627,14 +677,14 @@ private fun SmartScanRootApp(
         }
     }
 
-    // Document Tap Action Dialog: PDF Studio, Offline OCR, Image Filters
+    // Document Tap Action Dialog
     chosenDocForOptions?.let { doc ->
         AlertDialog(
             onDismissRequest = { chosenDocForOptions = null },
-            title = { Text(doc.title) },
+            title = { Text(doc.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Is document ke saath kya karna chahte hain?")
+                    Text("Choose an action for this document:")
                     Button(
                         onClick = {
                             chosenDocForOptions = null
@@ -674,6 +724,118 @@ private fun SmartScanRootApp(
         )
     }
 
+    // PDF Creation / Conversion Choice Dialog
+    if (showPdfConvertChoiceDialog) {
+        AlertDialog(
+            onDismissRequest = { showPdfConvertChoiceDialog = false },
+            title = { Text("PDF Creation & Conversion") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Choose how you want to convert:")
+                    Button(
+                        onClick = {
+                            showPdfConvertChoiceDialog = false
+                            onImportGallery()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Create PDF from Gallery Photos")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            showPdfConvertChoiceDialog = false
+                            onImportExternalPdf()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Import Existing PDF into Pages")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showPdfConvertChoiceDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Document Picker Dialog for Tools Tab
+    pendingDocPickerAction?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingDocPickerAction = null },
+            title = { Text(action.dialogTitle) },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(documents, key = { it.id }) { doc ->
+                        val thumb = doc.pagePathList().firstOrNull()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                                .clickable {
+                                    pendingDocPickerAction = null
+                                    when (action) {
+                                        PendingDocAction.PDF_STUDIO -> viewModel.openPdfStudio(doc)
+                                        PendingDocAction.OCR_STUDIO -> viewModel.openOcrStudio(doc)
+                                        PendingDocAction.IMAGE_EDITOR -> viewModel.openExistingDocumentInEditor(doc)
+                                    }
+                                }
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(MaterialTheme.colorScheme.surface),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (thumb != null && File(thumb).exists()) {
+                                    AsyncImage(
+                                        model = File(thumb),
+                                        contentDescription = doc.title,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Description,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = doc.title,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${doc.pageCount} page(s) • ${ImageEnhancer.formatFileSize(doc.fileSizeBytes)}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { pendingDocPickerAction = null }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showMergeDialog) {
         MergeDocumentsDialog(
             documents = documents,
@@ -685,7 +847,7 @@ private fun SmartScanRootApp(
                     mergedTitle = title,
                     onSuccess = {
                         onTriggerAdThenAction {
-                            showNotice("Merged PDF ready hai! Ab Save ya Share karein.")
+                            showNotice("Merged PDF is ready! You can Save or Share it now.")
                         }
                     },
                     onError = { err -> showNotice(err) }
@@ -699,7 +861,7 @@ private fun SmartScanRootApp(
             onDismiss = { showStandaloneSignaturePad = false },
             onSaved = {
                 showStandaloneSignaturePad = false
-                showNotice("Digital Signature save ho gaya! Ab kisi bhi PDF par lagayein.")
+                showNotice("Digital Signature saved! Attach it to any document in PDF Studio.")
             }
         )
     }
