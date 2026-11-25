@@ -78,7 +78,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         onError: (String) -> Unit
     ) {
         if (imageUris.isEmpty()) {
-            onError("Koi image select ya scan nahi hui.")
+            onError("No image was selected or scanned.")
             return
         }
 
@@ -96,7 +96,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
 
             val (paths, savedPdfPath) = result
             if (paths.isEmpty()) {
-                onError("Image save karne mein problem aayi. Dobara try karein.")
+                onError("Could not save the selected image. Please try again.")
                 return@launch
             }
 
@@ -149,6 +149,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         finalTitle: String,
         finalFolder: String,
         finalPagePaths: List<String>,
+        imagesModified: Boolean = true,
         onSaved: (String) -> Unit
     ) {
         viewModelScope.launch {
@@ -156,7 +157,15 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             val safeFolder = finalFolder.trim().ifEmpty { "Scanned" }
 
             withContext(Dispatchers.IO) {
-                val totalBytes = ImageEnhancer.calculateTotalSize(finalPagePaths, session.pdfPath)
+                // Remove stale cached PDF if images were modified so PDF Studio generates a fresh one
+                val effectivePdfPath = if (imagesModified) {
+                    session.pdfPath?.let { oldPdf -> runCatching { File(oldPdf).delete() } }
+                    null
+                } else {
+                    session.pdfPath
+                }
+
+                val totalBytes = ImageEnhancer.calculateTotalSize(finalPagePaths, effectivePdfPath)
                 val existing = session.existingDocument
                 if (existing != null) {
                     dao.updateDocument(
@@ -164,6 +173,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                             title = safeTitle,
                             folderName = safeFolder,
                             imagePaths = finalPagePaths.joinToString("|"),
+                            pdfPath = effectivePdfPath,
                             pageCount = finalPagePaths.size,
                             fileSizeBytes = totalBytes
                         )
@@ -174,7 +184,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                             title = safeTitle,
                             folderName = safeFolder,
                             imagePaths = finalPagePaths.joinToString("|"),
-                            pdfPath = session.pdfPath,
+                            pdfPath = effectivePdfPath,
                             pageCount = finalPagePaths.size,
                             fileSizeBytes = totalBytes
                         )
@@ -182,7 +192,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                 }
             }
             _editorSession.value = null
-            onSaved("\"$safeTitle\" offline library mein save ho gaya.")
+            onSaved("\"$safeTitle\" saved to your offline library.")
         }
     }
 
@@ -223,7 +233,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                 _pdfStudioDoc.value = result.first
                 onSuccess(result.first, result.second)
             } else {
-                onError("PDF banane mein error aaya. Pages check karein.")
+                onError("Failed to generate PDF. Please check document pages.")
             }
         }
     }
@@ -236,7 +246,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         onError: (String) -> Unit
     ) {
         if (selectedIndices.isEmpty()) {
-            onError("Kam se kam ek page select karein.")
+            onError("Select at least one page to extract.")
             return
         }
         viewModelScope.launch {
@@ -277,9 +287,9 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             _isBusy.value = false
 
             if (createdTitle != null) {
-                onSuccess("\"$createdTitle\" naye document ke roop mein save ho gaya.")
+                onSuccess("\"$createdTitle\" saved as a new document.")
             } else {
-                onError("Pages extract karne mein problem aayi.")
+                onError("Could not extract selected pages.")
             }
         }
     }
@@ -291,7 +301,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         onError: (String) -> Unit
     ) {
         if (selectedDocs.size < 2) {
-            onError("Merge karne ke liye kam se kam 2 documents chunein.")
+            onError("Select at least 2 documents to merge.")
             return
         }
         viewModelScope.launch {
@@ -337,7 +347,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                 _pdfStudioDoc.value = mergedDoc
                 onSuccess(mergedDoc)
             } else {
-                onError("Documents merge nahi ho paaye.")
+                onError("Could not merge the selected documents.")
             }
         }
     }
@@ -372,14 +382,13 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             _isBusy.value = false
 
             if (resultPair != null) {
-                onSuccess("\"${resultPair.first}\" (${resultPair.second} pages) import ho gaya.")
+                onSuccess("\"${resultPair.first}\" (${resultPair.second} pages) imported.")
             } else {
-                onError("PDF file read nahi ho paayi (shayed password locked ya corrupt hai).")
+                onError("Unable to read PDF (file may be password-protected or corrupted).")
             }
         }
     }
 
-    // --- PHASE 5: OFFLINE OCR ---
     fun runOfflineOcrForDocument(
         document: DocumentEntity,
         onSuccess: (String) -> Unit,
@@ -398,10 +407,10 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 _ocrStudioDoc.value = updated
                 _isBusy.value = false
-                onSuccess("Offline OCR complete! Text save ho gaya.")
+                onSuccess("Offline OCR completed and text saved.")
             }.onFailure { err ->
                 _isBusy.value = false
-                onError(err.localizedMessage ?: "OCR text extract nahi ho paaya.")
+                onError(err.localizedMessage ?: "No readable text found.")
             }
         }
     }
@@ -417,11 +426,10 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                 dao.updateDocument(updated)
             }
             _ocrStudioDoc.value = updated
-            onSaved("OCR text offline database mein update ho gaya.")
+            onSaved("OCR text saved to offline database.")
         }
     }
 
-    // --- PHASE 5: LIVE ONLINE AI ASSISTANT ---
     fun selectAiDocument(docId: Long?) {
         _selectedAiDocId.value = docId
     }
@@ -449,7 +457,6 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             _isAiLoading.value = true
             var docText = attachedDoc?.extractedText.orEmpty()
 
-            // Agar selected document ka OCR abhi nahi hua hai, to pehle offline OCR chala lein
             if (attachedDoc != null && docText.isBlank()) {
                 val ocrRes = OcrEngine.extractTextFromImages(
                     context = getApplication(),
@@ -480,7 +487,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
             }.onFailure { err ->
                 _aiMessages.value = _aiMessages.value + AiChatMessage(
                     isUser = false,
-                    text = err.localizedMessage ?: "AI request fail ho gayi.",
+                    text = err.localizedMessage ?: "AI request failed.",
                     isError = true
                 )
             }
