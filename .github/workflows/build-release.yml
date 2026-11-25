@@ -1,0 +1,72 @@
+name: Build Smart Scan Release APK & AAB
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Prepare Release Keystore
+        env:
+          SECRET_KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          SECRET_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SECRET_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$SECRET_KEYSTORE_BASE64" ]; then
+            echo "$SECRET_KEYSTORE_BASE64" | base64 --decode > app/release-keystore.jks
+            echo "KEYSTORE_PASSWORD=$SECRET_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$SECRET_KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=$SECRET_KEY_PASSWORD" >> $GITHUB_ENV
+            echo "Play Store Keystore loaded from GitHub Secrets."
+          else
+            keytool -genkeypair -v \
+              -keystore app/release-keystore.jks \
+              -storetype PKCS12 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -alias smartscan \
+              -storepass smartscan123 \
+              -keypass smartscan123 \
+              -dname "CN=Smart Scan, OU=Mobile, O=SmartScan, C=IN"
+            echo "KEYSTORE_PASSWORD=smartscan123" >> $GITHUB_ENV
+            echo "KEY_ALIAS=smartscan" >> $GITHUB_ENV
+            echo "KEY_PASSWORD=smartscan123" >> $GITHUB_ENV
+            echo "NOTE: Built with temporary release key for installation testing. Add GitHub Secrets before Play Store upload."
+          fi
+
+      - name: Build Signed Release APK and Play Store AAB
+        run: gradle assembleRelease bundleRelease --no-daemon --stacktrace
+
+      - name: Upload Signed Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartScan-Release-APK
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload Play Store Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartScan-PlayStore-AAB
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
