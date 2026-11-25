@@ -15,6 +15,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
+import com.smartscan.pro.BuildConfig
 
 enum class ThemeMode {
     SYSTEM,
@@ -55,8 +56,11 @@ object SmartScanPrefs {
     }
 
     fun getAiApiKey(context: Context): String {
-        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_AI_API_KEY, "") ?: ""
+        val saved = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_AI_API_KEY, "")
+            ?.trim()
+            .orEmpty()
+        return saved.ifBlank { BuildConfig.GEMINI_API_KEY }
     }
 
     fun setAiApiKey(context: Context, key: String) {
