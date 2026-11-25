@@ -55,6 +55,8 @@ jobs:
           fi
 
       - name: Build Signed Release APK and Play Store AAB
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: gradle assembleRelease bundleRelease --no-daemon --stacktrace
 
       - name: Upload Signed Release APK
