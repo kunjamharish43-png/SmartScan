@@ -16,6 +16,12 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
+        val geminiApiKey = (System.getenv("GEMINI_API_KEY") ?: "")
+            .trim()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
