@@ -33,7 +33,7 @@ object OcrEngine {
     ): Result<String> = withContext(Dispatchers.IO) {
         val validFiles = imagePaths.map { File(it) }.filter { it.exists() }
         if (validFiles.isEmpty()) {
-            return@withContext Result.failure(IllegalArgumentException("Koi valid page image nahi mili."))
+            return@withContext Result.failure(IllegalArgumentException("No valid page image found."))
         }
 
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -53,7 +53,7 @@ object OcrEngine {
 
             val finalOutput = combined.toString().trim()
             if (finalOutput.isBlank()) {
-                Result.failure(Exception("Is image mein koi readable text nahi mila. Clear photo ya Sharp Doc filter try karein."))
+                Result.failure(Exception("No readable text found in this image. Try a clearer photo or Sharp Doc filter."))
             } else {
                 Result.success(finalOutput)
             }
@@ -120,7 +120,7 @@ object AiAssistantEngine {
         val cleanKey = apiKey.trim()
         if (cleanKey.isBlank()) {
             return@withContext Result.failure(
-                IllegalStateException("Settings mein pehle apni Gemini API Key save karein.")
+                IllegalStateException("Gemini API key is not configured.")
             )
         }
 
@@ -147,7 +147,7 @@ object AiAssistantEngine {
             )
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$cleanKey"
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$cleanKey"
         val request = Request.Builder()
             .url(url)
             .post(payload.toString().toRequestBody(jsonMediaType))
@@ -161,7 +161,7 @@ object AiAssistantEngine {
                         JSONObject(rawBody).optJSONObject("error")?.optString("message")
                     }.getOrNull()
                     val msg = apiError?.takeIf { it.isNotBlank() }
-                        ?: "AI Server Error (HTTP ${response.code}). API Key ya internet check karein."
+                        ?: "AI Server Error (HTTP ${response.code}). Please check your internet connection."
                     return@withContext Result.failure(Exception(msg))
                 }
 
@@ -172,13 +172,13 @@ object AiAssistantEngine {
                 val replyText = parts?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
 
                 if (replyText.isBlank()) {
-                    Result.failure(Exception("AI se koi response text nahi aaya. Dobara try karein."))
+                    Result.failure(Exception("No response received from AI. Please try again."))
                 } else {
                     Result.success(replyText)
                 }
             }
         } catch (e: IOException) {
-            Result.failure(Exception("Internet connection nahi hai ya server slow hai. Network check karein."))
+            Result.failure(Exception("No internet connection or server timeout. Please check your network."))
         } catch (e: Exception) {
             Result.failure(Exception("AI error: ${e.localizedMessage ?: "Unknown error"}"))
         }
@@ -207,7 +207,7 @@ object BiometricAuthHelper {
         onError: (String) -> Unit
     ) {
         if (!canAuthenticate(activity)) {
-            onError("Is phone mein Fingerprint ya Screen Lock set nahi hai. Phone Settings mein lock lagayein.")
+            onError("No fingerprint or screen lock is set up on this device.")
             return
         }
 
