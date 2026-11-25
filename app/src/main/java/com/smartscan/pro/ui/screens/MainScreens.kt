@@ -36,11 +36,12 @@ import androidx.compose.material.icons.rounded.BrightnessAuto
 import androidx.compose.material.icons.rounded.CallMerge
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Draw
@@ -54,6 +55,7 @@ import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
@@ -65,6 +67,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -88,6 +91,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,6 +102,7 @@ import coil.compose.AsyncImage
 import com.smartscan.pro.BuildConfig
 import com.smartscan.pro.data.DocumentEntity
 import com.smartscan.pro.engine.ImageEnhancer
+import com.smartscan.pro.ui.AiChatMessage
 import com.smartscan.pro.ui.theme.AmberWarn
 import com.smartscan.pro.ui.theme.CyanAccent
 import com.smartscan.pro.ui.theme.EmeraldSuccess
@@ -252,16 +258,10 @@ fun HomeScreen(
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Recent Documents (${documents.size})",
-                    style = MaterialTheme.typography.titleLarge
-                )
-            }
+            Text(
+                text = "Recent Documents (${documents.size})",
+                style = MaterialTheme.typography.titleLarge
+            )
         }
 
         if (filteredDocs.isEmpty()) {
@@ -352,15 +352,16 @@ fun DocumentItemCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.height(2.dp))
+                val ocrTag = if (document.extractedText.isNotBlank()) " • OCR ✓" else ""
                 Text(
-                    text = "${document.pageCount} page(s) • ${ImageEnhancer.formatFileSize(document.fileSizeBytes)} • ${document.folderName}",
+                    text = "${document.pageCount} page(s) • ${ImageEnhancer.formatFileSize(document.fileSizeBytes)}$ocrTag",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = dateLabel,
+                    text = "${document.folderName} • $dateLabel",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                 )
@@ -764,7 +765,7 @@ fun DocumentsScreen(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search by file name, folder or text...") },
+                placeholder = { Text("Search by file name, folder or OCR text...") },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)
@@ -815,15 +816,24 @@ fun DocumentsScreen(
 @Composable
 fun AiAssistantScreen(
     hasApiKey: Boolean,
+    documents: List<DocumentEntity>,
+    selectedDocId: Long?,
+    messages: List<AiChatMessage>,
+    isLoading: Boolean,
+    onSelectDoc: (Long?) -> Unit,
+    onClearChat: () -> Unit,
     onOpenSettings: () -> Unit,
-    onRunAiAction: (String) -> Unit
+    onSendPrompt: (String) -> Unit,
+    onCopiedNotice: (String) -> Unit
 ) {
+    val clipboard = LocalClipboardManager.current
     var promptText by remember { mutableStateOf("") }
-    val actions = listOf(
-        "Summarize Document" to Icons.Rounded.AutoAwesome,
-        "Translate Text" to Icons.Rounded.Translate,
-        "Extract Key Points" to Icons.Rounded.Description,
-        "Smart Rewrite" to Icons.Rounded.AutoFixHigh
+
+    val quickPrompts = listOf(
+        "Summarize" to "Is document ka short summary bullet points mein do.",
+        "Translate Hindi" to "Is document ke text ko aasan Hindi mein translate karo.",
+        "Key Points" to "Is document se saare important dates, names, numbers aur key points nikaalo.",
+        "Fix Grammar" to "Is text ki spelling aur grammar correct karke clean professional version likho."
     )
 
     Column(
@@ -831,83 +841,221 @@ fun AiAssistantScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text(
-            text = "AI Document Assistant",
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (hasApiKey) {
-                    EmeraldSuccess.copy(alpha = 0.12f)
-                } else {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                }
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Text(
+                text = "AI Document Assistant",
+                style = MaterialTheme.typography.headlineMedium
+            )
+            if (messages.isNotEmpty()) {
+                IconButton(onClick = onClearChat) {
+                    Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear Chat")
+                }
+            }
+        }
+
+        if (!hasApiKey) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                )
             ) {
-                Text(
-                    text = if (hasApiKey) "AI API Key Configured" else "Online AI Setup Required",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (hasApiKey) EmeraldSuccess else MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                Text(
-                    text = if (hasApiKey) {
-                        "Aapki API key saved hai. Phase 5 mein live document analysis aur chat active ho jayega."
-                    } else {
-                        "Real AI results ke liye Settings mein apni Gemini API key daalein. Offline OCR bina internet ke chalega."
-                    },
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                if (!hasApiKey) {
-                    OutlinedButton(onClick = onOpenSettings, shape = RoundedCornerShape(12.dp)) {
-                        Text("Configure API Key in Settings")
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Gemini API Key Required (Online AI)",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "Live AI results ke liye Settings mein apni Gemini API Key save karein. Offline OCR bina key ke chalta hai.",
+                        fontSize = 12.sp
+                    )
+                    OutlinedButton(onClick = onOpenSettings, shape = RoundedCornerShape(10.dp)) {
+                        Text("Add API Key in Settings")
                     }
                 }
             }
         }
 
-        Text(
-            text = "AI Document Actions",
-            style = MaterialTheme.typography.titleMedium
-        )
-
-        actions.chunked(2).forEach { pair ->
+        // Document Context Picker
+        if (documents.isNotEmpty()) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                pair.forEach { (label, icon) ->
+                FilterChip(
+                    selected = selectedDocId == null,
+                    onClick = { onSelectDoc(null) },
+                    label = { Text("General AI", fontSize = 12.sp) }
+                )
+                documents.take(10).forEach { doc ->
+                    FilterChip(
+                        selected = selectedDocId == doc.id,
+                        onClick = { onSelectDoc(doc.id) },
+                        label = {
+                            Text(
+                                text = doc.title.take(18),
+                                fontSize = 12.sp,
+                                maxLines = 1
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
+        // Quick Action Chips
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            quickPrompts.forEach { (label, fullPrompt) ->
+                OutlinedButton(
+                    enabled = !isLoading,
+                    onClick = { onSendPrompt(fullPrompt) },
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(label, fontSize = 12.sp)
+                }
+            }
+        }
+
+        // Live Chat Messages Area
+        LazyColumn(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (messages.isEmpty()) {
+                item {
                     Card(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable { onRunAiAction(label) },
-                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(34.dp)
+                            )
+                            Text(
+                                text = "Ready to Analyze Documents",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                text = "Upar se koi scanned document select karein aur Summarize, Translate ya apna sawal neeche likhein.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(messages, key = { it.id }) { msg ->
+                    val bubbleBg = when {
+                        msg.isUser -> MaterialTheme.colorScheme.primary
+                        msg.isError -> MaterialTheme.colorScheme.errorContainer
+                        else -> MaterialTheme.colorScheme.surface
+                    }
+                    val textColor = when {
+                        msg.isUser -> MaterialTheme.colorScheme.onPrimary
+                        msg.isError -> MaterialTheme.colorScheme.onErrorContainer
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (msg.isUser) Arrangement.End else Arrangement.Start
+                    ) {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = bubbleBg),
+                            modifier = Modifier.fillMaxWidth(0.90f)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = msg.text,
+                                    color = textColor,
+                                    fontSize = 13.sp,
+                                    lineHeight = 19.sp
+                                )
+                                if (!msg.isUser && !msg.isError) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(
+                                            onClick = {
+                                                clipboard.setText(AnnotatedString(msg.text))
+                                                onCopiedNotice("AI reply copy ho gaya!")
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.ContentCopy,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Copy", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
+
+            if (isLoading) {
+                item {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Text(
+                            text = "AI document analyze kar raha hai...",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
-
+        // Input Box
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -917,20 +1065,20 @@ fun AiAssistantScreen(
                 value = promptText,
                 onValueChange = { promptText = it },
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask AI about a scanned document...") },
+                placeholder = { Text("Ask AI about your document...") },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)
             )
             Button(
+                enabled = !isLoading && promptText.isNotBlank(),
                 onClick = {
-                    if (promptText.isNotBlank()) {
-                        onRunAiAction(promptText)
-                        promptText = ""
-                    }
+                    val q = promptText
+                    promptText = ""
+                    onSendPrompt(q)
                 },
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Text("Send")
+                Icon(Icons.Rounded.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
             }
         }
     }
@@ -962,10 +1110,9 @@ fun ToolsScreen(
             ToolModule("6. AI OCR & Text Recognition", "Offline Image to Text (ML Kit)", "Copy, edit, search & save extracted text", true, Icons.Rounded.TextFields),
             ToolModule("7. AI Document Assistant", "Summarize, Q&A & Translate", "Online AI powered document intelligence", false, Icons.Rounded.AutoAwesome),
             ToolModule("8. Document Management", "Folders, Tags & Smart Search", "Offline Room database, favorites & folders", true, Icons.Rounded.Layers),
-            ToolModule("9. Professional Tools", "QR / Barcode & E-Sign Pad", "Scan QR codes, create signatures & stamps", true, Icons.Rounded.QrCodeScanner),
             ToolModule("9. Professional Tools", "Digital Signature Maker", "Draw and save transparent signatures", true, Icons.Rounded.Draw),
-            ToolModule("10. Security & Vault", "PDF Password & Biometric Lock", "AES Keystore encryption & fingerprint lock", true, Icons.Rounded.Lock),
-            ToolModule("10. Security & Vault", "Batch Optimizer & Tuning", "Background WorkManager compression", true, Icons.Rounded.Tune)
+            ToolModule("10. Security & Vault", "Biometric Fingerprint Lock", "Protect private documents with Fingerprint/PIN", true, Icons.Rounded.Lock),
+            ToolModule("10. Security & Vault", "PDF Compression & Optimizer", "Reduce PDF file size offline", true, Icons.Rounded.Tune)
         )
     }
 
@@ -1195,7 +1342,7 @@ fun SettingsScreen(
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("AI Assistant API Key", style = MaterialTheme.typography.titleMedium)
+                        Text("AI Assistant API Key (Gemini)", style = MaterialTheme.typography.titleMedium)
                         Text(
                             text = if (apiKey.isBlank()) "Not configured — Tap to add key" else "Configured (Tap to update)",
                             fontSize = 12.sp,
@@ -1243,11 +1390,11 @@ fun SettingsScreen(
     if (showApiDialog) {
         AlertDialog(
             onDismissRequest = { showApiDialog = false },
-            title = { Text("Configure AI API Key") },
+            title = { Text("Configure Gemini API Key") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Online AI Document Assistant ke liye apni Gemini API key yahan paste karein. Yeh sirf aapke phone mein save rahegi.",
+                        "Google AI Studio se apni free Gemini API key lekar yahan paste karein. Yeh sirf aapke phone mein save rahegi.",
                         fontSize = 13.sp
                     )
                     OutlinedTextField(
