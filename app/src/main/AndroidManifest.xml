@@ -14,6 +14,8 @@
     <application
         android:name=".SmartScanApp"
         android:allowBackup="true"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
         android:label="Smart Scan"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
