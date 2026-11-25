@@ -51,16 +51,15 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PictureAsPdf
-import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.TextFields
-import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -68,6 +67,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -142,7 +143,7 @@ fun HomeScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
@@ -151,18 +152,23 @@ fun HomeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Smart Scan",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onBackground
+                        color = MaterialTheme.colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "AI Document Scanner & PDF Studio",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+                Spacer(modifier = Modifier.width(10.dp))
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = EmeraldSuccess.copy(alpha = 0.14f)
@@ -170,7 +176,7 @@ fun HomeScreen(
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.CloudOff,
@@ -182,7 +188,9 @@ fun HomeScreen(
                             text = "Offline Ready",
                             color = EmeraldSuccess,
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -242,7 +250,7 @@ fun HomeScreen(
                 )
                 QuickActionTile(
                     modifier = Modifier.weight(1f),
-                    title = "Offline OCR",
+                    title = "OCR Text",
                     icon = Icons.Rounded.TextFields,
                     tint = CyanAccent,
                     onClick = { onQuickAction("Offline OCR") }
@@ -270,9 +278,9 @@ fun HomeScreen(
                     icon = Icons.Rounded.Folder,
                     title = if (searchQuery.isBlank()) "No Scanned Documents Yet" else "No Matching Documents",
                     subtitle = if (searchQuery.isBlank()) {
-                        "Aapka offline library abhi khaali hai. Real camera se document scan karne ke liye Scan Now par tap karein."
+                        "Your offline library is empty. Tap Scan Now to capture your first document."
                     } else {
-                        "\"$searchQuery\" ke liye koi file nahi mili."
+                        "No files matched \"$searchQuery\"."
                     },
                     buttonLabel = "Start First Scan",
                     onAction = onOpenScanTab
@@ -300,12 +308,16 @@ fun DocumentItemCard(
     onRename: (String) -> Unit,
     onDelete: () -> Unit
 ) {
+    var menuExpanded by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+
     val firstPage = remember(document.imagePaths) { document.pagePathList().firstOrNull() }
     val dateLabel = remember(document.createdAt) {
         SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault()).format(Date(document.createdAt))
     }
+    val pageLabel = if (document.pageCount == 1) "1 page" else "${document.pageCount} pages"
+    val ocrTag = if (document.extractedText.isNotBlank()) " • OCR ✓" else ""
 
     Card(
         modifier = Modifier
@@ -317,13 +329,13 @@ fun DocumentItemCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(start = 12.dp, top = 12.dp, end = 6.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(58.dp)
+                    .size(56.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -344,18 +356,33 @@ fun DocumentItemCard(
                 }
             }
 
-            Column(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Text(
+                        text = document.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (document.isFavorite) {
+                        Icon(
+                            imageVector = Icons.Rounded.Star,
+                            contentDescription = "Favorite",
+                            tint = AmberWarn,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
                 Text(
-                    text = document.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                val ocrTag = if (document.extractedText.isNotBlank()) " • OCR ✓" else ""
-                Text(
-                    text = "${document.pageCount} page(s) • ${ImageEnhancer.formatFileSize(document.fileSizeBytes)}$ocrTag",
-                    fontSize = 11.sp,
+                    text = "$pageLabel • ${ImageEnhancer.formatFileSize(document.fileSizeBytes)}$ocrTag",
+                    fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -363,33 +390,59 @@ fun DocumentItemCard(
                 Text(
                     text = "${document.folderName} • $dateLabel",
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onToggleFavorite, modifier = Modifier.size(34.dp)) {
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
                     Icon(
-                        imageVector = if (document.isFavorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
-                        contentDescription = "Favorite",
-                        tint = if (document.isFavorite) AmberWarn else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "Document options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = { showRename = true }, modifier = Modifier.size(34.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.Edit,
-                        contentDescription = "Rename",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(19.dp)
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (document.isFavorite) "Remove Favorite" else "Add to Favorites") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = if (document.isFavorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                                contentDescription = null,
+                                tint = if (document.isFavorite) AmberWarn else MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onToggleFavorite()
+                        }
                     )
-                }
-                IconButton(onClick = { showDeleteConfirm = true }, modifier = Modifier.size(34.dp)) {
-                    Icon(
-                        imageVector = Icons.Rounded.Delete,
-                        contentDescription = "Delete",
-                        tint = Color(0xFFEF4444),
-                        modifier = Modifier.size(19.dp)
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                        onClick = {
+                            menuExpanded = false
+                            showRename = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = Color(0xFFEF4444)) },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = null,
+                                tint = Color(0xFFEF4444)
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            showDeleteConfirm = true
+                        }
                     )
                 }
             }
@@ -425,7 +478,7 @@ fun DocumentItemCard(
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
             title = { Text("Delete Document?") },
-            text = { Text("\"${document.title}\" phone se permanently delete ho jayega.") },
+            text = { Text("\"${document.title}\" will be permanently deleted from your device.") },
             confirmButton = {
                 Button(
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
@@ -480,8 +533,8 @@ private fun HeroScanBanner(onStartScan: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Auto edge crop, magic filter, OCR text aur high-quality PDF — bilkul offline.",
-                    color = Color.White.copy(alpha = 0.88f),
+                    text = "Auto edge crop, magic filters, offline OCR, and HD PDF export.",
+                    color = Color.White.copy(alpha = 0.90f),
                     fontSize = 13.sp,
                     lineHeight = 18.sp
                 )
@@ -554,7 +607,7 @@ private fun QuickActionTile(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 14.dp, horizontal = 6.dp),
+                .padding(vertical = 14.dp, horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -577,6 +630,8 @@ private fun QuickActionTile(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
             )
         }
@@ -615,7 +670,7 @@ fun ScanScreen(
                 style = MaterialTheme.typography.headlineMedium
             )
             Text(
-                text = "Mode select karein aur live ML Kit Camera Scanner launch karein.",
+                text = "Choose a scan mode and launch the smart camera scanner.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -682,7 +737,7 @@ fun ScanScreen(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    text = "Real auto edge detection, manual crop, shadow cleanup aur multi-page scan ready.",
+                    text = "Automatic edge detection, perspective crop, shadow removal, and multi-page scanning.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -750,7 +805,7 @@ fun DocumentsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -765,7 +820,7 @@ fun DocumentsScreen(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search by file name, folder or OCR text...") },
+                placeholder = { Text("Search by file name, folder, or OCR text...") },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp)
@@ -794,7 +849,7 @@ fun DocumentsScreen(
                 EmptyStateCard(
                     icon = Icons.Rounded.Description,
                     title = "No Files in \"$selectedFilter\"",
-                    subtitle = "Scan ya Gallery se document import karke filters lagayein aur yahan permanent offline save karein.",
+                    subtitle = "Scan a document or import from Gallery to organize and save files offline.",
                     buttonLabel = "Scan New Document",
                     onAction = onOpenScanTab
                 )
@@ -830,10 +885,10 @@ fun AiAssistantScreen(
     var promptText by remember { mutableStateOf("") }
 
     val quickPrompts = listOf(
-        "Summarize" to "Is document ka short summary bullet points mein do.",
-        "Translate Hindi" to "Is document ke text ko aasan Hindi mein translate karo.",
-        "Key Points" to "Is document se saare important dates, names, numbers aur key points nikaalo.",
-        "Fix Grammar" to "Is text ki spelling aur grammar correct karke clean professional version likho."
+        "Summarize" to "Provide a concise bullet-point summary of this document.",
+        "Translate Hindi" to "Translate this document text into clear, natural Hindi.",
+        "Key Points" to "Extract all important names, dates, amounts, and key points from this document.",
+        "Fix Grammar" to "Rewrite this text cleanly with corrected spelling and grammar."
     )
 
     Column(
@@ -877,7 +932,7 @@ fun AiAssistantScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
                     Text(
-                        text = "Live AI results ke liye Settings mein apni Gemini API Key save karein. Offline OCR bina key ke chalta hai.",
+                        text = "Add your Gemini API Key in Settings to enable online AI analysis. Offline OCR works without an API key.",
                         fontSize = 12.sp
                     )
                     OutlinedButton(onClick = onOpenSettings, shape = RoundedCornerShape(10.dp)) {
@@ -887,7 +942,6 @@ fun AiAssistantScreen(
             }
         }
 
-        // Document Context Picker
         if (documents.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -916,7 +970,6 @@ fun AiAssistantScreen(
             }
         }
 
-        // Quick Action Chips
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -941,7 +994,6 @@ fun AiAssistantScreen(
             }
         }
 
-        // Live Chat Messages Area
         LazyColumn(
             modifier = Modifier
                 .weight(1f)
@@ -973,7 +1025,7 @@ fun AiAssistantScreen(
                                 style = MaterialTheme.typography.titleMedium
                             )
                             Text(
-                                text = "Upar se koi scanned document select karein aur Summarize, Translate ya apna sawal neeche likhein.",
+                                text = "Select a scanned document above and tap Summarize, Translate, or ask any question below.",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
@@ -1018,7 +1070,7 @@ fun AiAssistantScreen(
                                         TextButton(
                                             onClick = {
                                                 clipboard.setText(AnnotatedString(msg.text))
-                                                onCopiedNotice("AI reply copy ho gaya!")
+                                                onCopiedNotice("AI response copied to clipboard.")
                                             }
                                         ) {
                                             Icon(
@@ -1046,7 +1098,7 @@ fun AiAssistantScreen(
                     ) {
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         Text(
-                            text = "AI document analyze kar raha hai...",
+                            text = "Analyzing document with AI...",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1055,7 +1107,6 @@ fun AiAssistantScreen(
             }
         }
 
-        // Input Box
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1102,16 +1153,16 @@ fun ToolsScreen(
         listOf(
             ToolModule("1. Smart Scanning", "Multi-Page & Auto Edge Scan", "Auto crop, perspective fix, ID & book scan", true, Icons.Rounded.DocumentScanner),
             ToolModule("2. AI Image Enhancement", "Magic Color, B&W & Shadow Fix", "Auto contrast, sharpen, rotate & brightness", true, Icons.Rounded.AutoFixHigh),
-            ToolModule("3. Advanced Image Editing", "Gallery Import & Filter Studio", "Import photos and clean document pages", true, Icons.Rounded.Crop),
-            ToolModule("4. PDF Creation & Conversion", "Image to PDF & PDF to Image", "A4/Letter sizing, margins, TXT & PDF export", true, Icons.Rounded.PictureAsPdf),
-            ToolModule("5. Advanced PDF Editor", "Merge, Split, Compress & Sign", "Reorder pages, watermark, digital signature", true, Icons.Rounded.CallMerge),
-            ToolModule("5. Advanced PDF Editor", "Split & Extract PDF Pages", "Separate ranges or delete unwanted pages", true, Icons.Rounded.ContentCut),
-            ToolModule("5. Advanced PDF Editor", "Add Watermark & Signature", "Custom stamp, hand-drawn e-signature", true, Icons.Rounded.BrandingWatermark),
-            ToolModule("6. AI OCR & Text Recognition", "Offline Image to Text (ML Kit)", "Copy, edit, search & save extracted text", true, Icons.Rounded.TextFields),
+            ToolModule("3. Advanced Image Editing", "Gallery Import & Filter Studio", "Import photos and enhance document pages", true, Icons.Rounded.Crop),
+            ToolModule("4. PDF Creation & Conversion", "Image to PDF & PDF to Image", "Create PDF from photos or import external PDF", true, Icons.Rounded.PictureAsPdf),
+            ToolModule("5. Advanced PDF Editor", "Merge Multiple PDFs", "Combine multiple scanned documents into one PDF", true, Icons.Rounded.CallMerge),
+            ToolModule("5. Advanced PDF Editor", "Split & Extract PDF Pages", "Select specific pages to create a new PDF", true, Icons.Rounded.ContentCut),
+            ToolModule("5. Advanced PDF Editor", "Add Watermark & Signature", "Custom text stamp & hand-drawn e-signature", true, Icons.Rounded.BrandingWatermark),
+            ToolModule("6. AI OCR & Text Recognition", "Offline Image to Text (ML Kit)", "Copy, edit, search & export extracted text", true, Icons.Rounded.TextFields),
             ToolModule("7. AI Document Assistant", "Summarize, Q&A & Translate", "Online AI powered document intelligence", false, Icons.Rounded.AutoAwesome),
-            ToolModule("8. Document Management", "Folders, Tags & Smart Search", "Offline Room database, favorites & folders", true, Icons.Rounded.Layers),
-            ToolModule("9. Professional Tools", "Digital Signature Maker", "Draw and save transparent signatures", true, Icons.Rounded.Draw),
-            ToolModule("10. Security & Vault", "Biometric Fingerprint Lock", "Protect private documents with Fingerprint/PIN", true, Icons.Rounded.Lock),
+            ToolModule("8. Document Management", "Folders, Favorites & Smart Search", "Offline database with fast search & organization", true, Icons.Rounded.Layers),
+            ToolModule("9. Professional Tools", "Digital Signature Maker", "Draw and save transparent e-signatures", true, Icons.Rounded.Draw),
+            ToolModule("10. Security & Vault", "Biometric Fingerprint Lock", "Protect documents with Fingerprint or Phone PIN", true, Icons.Rounded.Lock),
             ToolModule("10. Security & Vault", "PDF Compression & Optimizer", "Reduce PDF file size offline", true, Icons.Rounded.Tune)
         )
     }
@@ -1127,7 +1178,7 @@ fun ToolsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
@@ -1180,16 +1231,22 @@ fun ToolsScreen(
                             text = tool.category,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = tool.title,
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = tool.subtitle,
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     Surface(
@@ -1205,7 +1262,9 @@ fun ToolsScreen(
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (tool.isOffline) EmeraldSuccess else CyanAccent
+                            color = if (tool.isOffline) EmeraldSuccess else CyanAccent,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -1230,7 +1289,7 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
@@ -1394,7 +1453,7 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        "Google AI Studio se apni free Gemini API key lekar yahan paste karein. Yeh sirf aapke phone mein save rahegi.",
+                        "Paste your Gemini API key from Google AI Studio below. It stays stored locally on your device.",
                         fontSize = 13.sp
                     )
                     OutlinedTextField(
