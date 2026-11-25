@@ -1284,6 +1284,7 @@ fun SettingsScreen(
 ) {
     var showApiDialog by remember { mutableStateOf(false) }
     var tempKey by remember(apiKey) { mutableStateOf(apiKey) }
+    val hasBuiltInKey = BuildConfig.GEMINI_API_KEY.isNotBlank()
 
     LazyColumn(
         modifier = Modifier
@@ -1380,33 +1381,35 @@ fun SettingsScreen(
             }
         }
 
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showApiDialog = true },
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Row(
+        if (!hasBuiltInKey) {
+            item {
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        .clickable { showApiDialog = true },
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("AI Assistant API Key (Gemini)", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = if (apiKey.isBlank()) "Not configured — Tap to add key" else "Configured (Tap to update)",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
                         )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("AI Assistant API Key (Gemini)", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = if (apiKey.isBlank()) "Not configured — Tap to add key" else "Configured (Tap to update)",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -1446,7 +1449,7 @@ fun SettingsScreen(
         }
     }
 
-    if (showApiDialog) {
+    if (showApiDialog && !hasBuiltInKey) {
         AlertDialog(
             onDismissRequest = { showApiDialog = false },
             title = { Text("Configure Gemini API Key") },
