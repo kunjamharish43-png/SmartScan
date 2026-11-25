@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.smartscan.pro.data.DocumentEntity
 import com.smartscan.pro.data.SmartScanDatabase
+import com.smartscan.pro.engine.AiAssistantEngine
 import com.smartscan.pro.engine.ImageEnhancer
+import com.smartscan.pro.engine.OcrEngine
 import com.smartscan.pro.engine.PdfBuildOptions
 import com.smartscan.pro.engine.PdfStudioEngine
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,13 @@ data class EditorSession(
     val pdfPath: String? = null
 )
 
+data class AiChatMessage(
+    val id: Long = System.nanoTime(),
+    val isUser: Boolean,
+    val text: String,
+    val isError: Boolean = false
+)
+
 class SmartScanViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dao = SmartScanDatabase.getInstance(application).documentDao()
@@ -46,6 +55,18 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _pdfStudioDoc = MutableStateFlow<DocumentEntity?>(null)
     val pdfStudioDoc: StateFlow<DocumentEntity?> = _pdfStudioDoc.asStateFlow()
+
+    private val _ocrStudioDoc = MutableStateFlow<DocumentEntity?>(null)
+    val ocrStudioDoc: StateFlow<DocumentEntity?> = _ocrStudioDoc.asStateFlow()
+
+    private val _aiMessages = MutableStateFlow<List<AiChatMessage>>(emptyList())
+    val aiMessages: StateFlow<List<AiChatMessage>> = _aiMessages.asStateFlow()
+
+    private val _selectedAiDocId = MutableStateFlow<Long?>(null)
+    val selectedAiDocId: StateFlow<Long?> = _selectedAiDocId.asStateFlow()
+
+    private val _isAiLoading = MutableStateFlow(false)
+    val isAiLoading: StateFlow<Boolean> = _isAiLoading.asStateFlow()
 
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
@@ -115,6 +136,14 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
         _pdfStudioDoc.value = null
     }
 
+    fun openOcrStudio(document: DocumentEntity) {
+        _ocrStudioDoc.value = document
+    }
+
+    fun closeOcrStudio() {
+        _ocrStudioDoc.value = null
+    }
+
     fun saveEditorResult(
         session: EditorSession,
         finalTitle: String,
@@ -175,7 +204,6 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                     options = options
                 ) ?: return@withContext null
 
-                // Purana temporary PDF clean karein agar alag file hai
                 document.pdfPath?.let { oldPath ->
                     if (oldPath != pdfFile.absolutePath) {
                         runCatching { File(oldPath).delete() }
@@ -321,7 +349,7 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
     ) {
         viewModelScope.launch {
             _isBusy.value = true
-            val savedTitle = withContext(Dispatchers.IO) {
+            val resultPair = withContext(Dispatchers.IO) {
                 val ctx = getApplication<Application>()
                 val pagePaths = PdfStudioEngine.renderExternalPdfToImages(ctx, pdfUri)
                 if (pagePaths.isEmpty()) return@withContext null
@@ -339,14 +367,122 @@ class SmartScanViewModel(application: Application) : AndroidViewModel(applicatio
                         fileSizeBytes = ImageEnhancer.calculateTotalSize(pagePaths, savedPdf)
                     )
                 )
-                title
+                title to pagePaths.size
             }
             _isBusy.value = false
 
-            if (savedTitle != null) {
-                onSuccess("\"$savedTitle\" (${documents.value.firstOrNull()?.pageCount ?: 1} pages) import ho gaya.")
+            if (resultPair != null) {
+                onSuccess("\"${resultPair.first}\" (${resultPair.second} pages) import ho gaya.")
             } else {
                 onError("PDF file read nahi ho paayi (shayed password locked ya corrupt hai).")
+            }
+        }
+    }
+
+    // --- PHASE 5: OFFLINE OCR ---
+    fun runOfflineOcrForDocument(
+        document: DocumentEntity,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val result = OcrEngine.extractTextFromImages(
+                context = getApplication(),
+                imagePaths = document.pagePathList()
+            )
+            result.onSuccess { text ->
+                val updated = document.copy(extractedText = text)
+                withContext(Dispatchers.IO) {
+                    dao.updateDocument(updated)
+                }
+                _ocrStudioDoc.value = updated
+                _isBusy.value = false
+                onSuccess("Offline OCR complete! Text save ho gaya.")
+            }.onFailure { err ->
+                _isBusy.value = false
+                onError(err.localizedMessage ?: "OCR text extract nahi ho paaya.")
+            }
+        }
+    }
+
+    fun saveEditedOcrText(
+        document: DocumentEntity,
+        newText: String,
+        onSaved: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val updated = document.copy(extractedText = newText.trim())
+            withContext(Dispatchers.IO) {
+                dao.updateDocument(updated)
+            }
+            _ocrStudioDoc.value = updated
+            onSaved("OCR text offline database mein update ho gaya.")
+        }
+    }
+
+    // --- PHASE 5: LIVE ONLINE AI ASSISTANT ---
+    fun selectAiDocument(docId: Long?) {
+        _selectedAiDocId.value = docId
+    }
+
+    fun clearAiChat() {
+        _aiMessages.value = emptyList()
+    }
+
+    fun sendAiPrompt(
+        apiKey: String,
+        prompt: String,
+        explicitDoc: DocumentEntity? = null
+    ) {
+        val cleanPrompt = prompt.trim()
+        if (cleanPrompt.isBlank() || _isAiLoading.value) return
+
+        val attachedDoc = explicitDoc ?: documents.value.firstOrNull { it.id == _selectedAiDocId.value }
+
+        _aiMessages.value = _aiMessages.value + AiChatMessage(
+            isUser = true,
+            text = if (attachedDoc != null) "[${attachedDoc.title}]\n$cleanPrompt" else cleanPrompt
+        )
+
+        viewModelScope.launch {
+            _isAiLoading.value = true
+            var docText = attachedDoc?.extractedText.orEmpty()
+
+            // Agar selected document ka OCR abhi nahi hua hai, to pehle offline OCR chala lein
+            if (attachedDoc != null && docText.isBlank()) {
+                val ocrRes = OcrEngine.extractTextFromImages(
+                    context = getApplication(),
+                    imagePaths = attachedDoc.pagePathList()
+                )
+                ocrRes.onSuccess { extracted ->
+                    docText = extracted
+                    withContext(Dispatchers.IO) {
+                        dao.updateDocument(attachedDoc.copy(extractedText = extracted))
+                    }
+                }
+            }
+
+            val aiResult = AiAssistantEngine.askGemini(
+                apiKey = apiKey,
+                documentTitle = attachedDoc?.title,
+                documentText = docText,
+                userPrompt = cleanPrompt
+            )
+
+            _isAiLoading.value = false
+            aiResult.onSuccess { reply ->
+                _aiMessages.value = _aiMessages.value + AiChatMessage(
+                    isUser = false,
+                    text = reply,
+                    isError = false
+                )
+            }.onFailure { err ->
+                _aiMessages.value = _aiMessages.value + AiChatMessage(
+                    isUser = false,
+                    text = err.localizedMessage ?: "AI request fail ho gayi.",
+                    isError = true
+                )
             }
         }
     }
