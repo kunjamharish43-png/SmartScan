@@ -23,7 +23,12 @@
         <!-- Real Google AdMob App ID -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-1864861049894903~9772878696" />
+            android:value="ca-app-pub-1864881049894903~9772078696" />
+
+        <!-- Start.io App ID -->
+        <meta-data
+            android:name="com.startapp.sdk.APPLICATION_ID"
+            android:value="210747941" />
 
         <activity
             android:name=".MainActivity"
