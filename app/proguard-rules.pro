@@ -3,6 +3,10 @@
 # Google AdMob
 -keep class com.google.android.gms.ads.** { *; }
 
+# Start.io SDK
+-keep class com.startapp.** { *; }
+-dontwarn com.startapp.**
+
 # ML Kit Document Scanner & OCR
 -keep class com.google.mlkit.** { *; }
 -keep class com.google.android.gms.vision.** { *; }
