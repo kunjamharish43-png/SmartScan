@@ -133,5 +133,5 @@ dependencies {
     // Coroutines & Networking (Online AI Assistant)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.startapp:inapp-sdk:5.+")
+    implementation("com.startapp:inapp-sdk:5.1.0")
 }
